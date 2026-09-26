@@ -2,8 +2,12 @@ package com.veritransit.dashboard
 
 import com.sun.net.httpserver.HttpExchange
 import com.sun.net.httpserver.HttpServer
+import com.veritransit.dashboard.documents.ConsignmentFacts
+import com.veritransit.dashboard.GoodsImage
 import kotlinx.serialization.json.Json
 import java.net.InetSocketAddress
+import java.net.URLDecoder
+import java.nio.charset.StandardCharsets
 import java.time.Instant
 import java.util.concurrent.Executors
 
@@ -52,6 +56,34 @@ object DashboardMain {
             path.isEmpty() || path == "/index.html" ->
                 respond(exchange, 200, Pages.dashboard(vault, Instant.now()).toByteArray(), "text/html; charset=utf-8")
 
+            path.startsWith("/receipt/") -> {
+                val id = path.removePrefix("/receipt/")
+                val record = vault.find(id)
+                if (record == null) {
+                    respond(exchange, 404, "No receipt '$id' in the log\n".toByteArray(), "text/plain")
+                } else {
+                    // The form answers on top of what the receipt implied; every
+                    // unanswered fact stays unknown for the resolver.
+                    val query = queryParams(exchange)
+                    val facts = ConsignmentFacts.fromRecord(record, query)
+                    respond(exchange, 200, Pages.receiptPage(record, facts, Instant.now(), query).toByteArray(), "text/html; charset=utf-8")
+                }
+            }
+
+            path.startsWith("/img/") -> {
+                // Frozen goods-family photographs, committed under resources —
+                // never fetched at request time, so nothing here varies.
+                val name = path.removePrefix("/img/").removeSuffix(".jpg").removePrefix("report-")
+                val bytes = GoodsImage.entries
+                    .firstOrNull { it.name.equals(name, ignoreCase = true) }
+                    ?.bytes()
+                if (bytes == null) {
+                    respond(exchange, 404, "No such picture\n".toByteArray(), "text/plain")
+                } else {
+                    respond(exchange, 200, bytes, "image/jpeg")
+                }
+            }
+
             path.startsWith("/report/") && path.endsWith(".pdf") -> {
                 val id = path.removePrefix("/report/").removeSuffix(".pdf")
                 val record = vault.find(id)
@@ -71,6 +103,22 @@ object DashboardMain {
             else -> respond(exchange, 404, "Not found\n".toByteArray(), "text/plain")
         }
     }
+
+    /** `?a=1&b=x` off the request URI; the paperwork page's answers ride here. */
+    private fun queryParams(exchange: HttpExchange): Map<String, String> =
+        exchange.requestURI.rawQuery
+            ?.split('&')
+            ?.mapNotNull { pair ->
+                val i = pair.indexOf('=')
+                if (i <= 0) {
+                    null
+                } else {
+                    URLDecoder.decode(pair.substring(0, i), StandardCharsets.UTF_8) to
+                        URLDecoder.decode(pair.substring(i + 1), StandardCharsets.UTF_8)
+                }
+            }
+            ?.toMap()
+            ?: emptyMap()
 
     private fun api(exchange: HttpExchange, vault: Vault) {
         when (exchange.requestMethod) {
