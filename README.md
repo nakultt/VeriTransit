@@ -161,6 +161,39 @@ holds the delivery and the payment.
 ./gradlew :dashboard:run     # http://localhost:8080
 ```
 
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph APP["Android app — Kotlin + Jetpack Compose"]
+        UI[ui/screens<br/>Home · Scan · PackingList ·<br/>DockCount · ReceiptResult · Receipts · Settings]
+        CAM[ai/ camera + image prep]
+        GW[LlmGateway<br/>per-call backend choice]
+        NPU[NpuEngine<br/>GenieX → QAIRT on Hexagon NPU<br/>Qwen3-VL-4B w4a16]
+        DATA[data/<br/>models · seed repo · packing-list presets<br/>in-memory records]
+        UI --> CAM --> GW
+        GW -->|model available| NPU
+        UI <--> DATA
+    end
+
+    GW -->|fallback| OR[(OpenRouter<br/>cloud LLM)]
+    NPU -.->|first run only| HUB[(Qualcomm AI Hub<br/>~4.4 GB model bundle)]
+
+    DATA -->|POST /api/records| DB
+    subgraph DB["dashboard/ — JDK web service :8080"]
+        BOARD[Receipts board]
+        PDF[Deterministic PDF reports]
+        PAY{OK TO PAY / HOLD}
+    end
+
+    subgraph TB["telegram-bot/ — JVM long-poll service"]
+        ENG[receiving-check engine<br/>packed vs received per SKU]
+    end
+    TG[(Telegram)] <--> TB
+```
+
+**Receiving flow:** load the packing list or PO, then scan or photograph the delivery so the vision model reads the labels and counts. Confirm the dock count, and each line is classified as *matched*, *short*, *over*, *unlisted* or *damaged*. The app then files a goods-received note and hands the record to the back-office dashboard, which either clears payment or holds the delivery.
+
 ## Highlights
 
 - **Offline after setup** — in-memory records; the network is used once, to pull
